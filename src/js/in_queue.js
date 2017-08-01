@@ -36,7 +36,6 @@
 
 	var
 		lodash = require('./lib_managed/lodash'),
-		helpers = require('./lib/helpers'),
 
 		object = typeof exports !== 'undefined' ? exports : this; // For eventual node.js environment support
 
@@ -46,7 +45,7 @@
 	 *   after the Tracker has been initialized and loaded
 	 ************************************************************/
 
-	object.InQueueManager = function(TrackerConstructor, version, pageViewId, mutSnowplowState, asyncQueue, functionName) {
+	object.InQueueManager = function(TrackerConstructor, version, mutSnowplowState, asyncQueue, functionName) {
 
 		// Page view ID should be shared between all tracker instances
 		var trackerDictionary = {};
@@ -66,41 +65,17 @@
 					if (trackerDictionary.hasOwnProperty(names[i])) {
 						namedTrackers.push(trackerDictionary[names[i]]);
 					} else {
-						helpers.warn('Warning: Tracker namespace "' + names[i] + '" not configured');
 					}
 				}
 			}
 
 			if (namedTrackers.length === 0) {
-				helpers.warn('Warning: No tracker configured');
 			}
 
 			return namedTrackers;
 		}
 
-		/**
-		 * Legacy support for input of the form _snaq.push(['setCollectorCf', 'd34uzc5hjrimh8'])
-		 * 
-		 * @param string f Either 'setCollectorCf' or 'setCollectorUrl'
-		 * @param string endpoint
-		 * @param string namespace Optional tracker name
-		 * 
-		 * TODO: remove this in 2.1.0
-		 */
-		function legacyCreateNewNamespace(f, endpoint, namespace) {
-			helpers.warn(f + ' is deprecated. Set the collector when a new tracker instance using newTracker.');
 
-			var name;
-
-			if (lodash.isUndefined(namespace)) {
-				name = 'sp';
-			} else {
-				name = namespace;
-			}
-
-			createNewNamespace(name);
-			trackerDictionary[name][f](endpoint);
-		}
 
 		/**
 		 * Initiate a new tracker namespace
@@ -112,10 +87,9 @@
 			argmap = argmap || {};
 
 			if (!trackerDictionary.hasOwnProperty(namespace)) {
-				trackerDictionary[namespace] = new TrackerConstructor(functionName, namespace, version, pageViewId, mutSnowplowState, argmap);
+				trackerDictionary[namespace] = new TrackerConstructor(functionName, namespace, version,  mutSnowplowState, argmap);
 				trackerDictionary[namespace].setCollectorUrl(endpoint);
 			} else {
-				helpers.warn('Tracker namespace ' + namespace + ' already exists.');
 			}
 		}
 

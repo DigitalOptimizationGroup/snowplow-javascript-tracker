@@ -50,27 +50,25 @@
 	 * @param object mutSnowplowState Gives the pageUnloadGuard a reference to the outbound queue
 	 *                                so it can unload the page when all queues are empty
 	 * @param boolean useLocalStorage Whether to use localStorage at all
-	 * @param boolean usePost Whether to send events by POST or GET
 	 * @param int bufferSize How many events to batch in localStorage before sending them all.
 	 *                       Only applies when sending POST requests and when localStorage is available.
 	 * @param int maxPostBytes Maximum combined size in bytes of the event JSONs in a POST request
 	 * @return object OutQueueManager instance
 	 */
-	object.OutQueueManager = function (functionName, namespace, mutSnowplowState, useLocalStorage, usePost, bufferSize, maxPostBytes) {
+	object.OutQueueManager = function (functionName, namespace, mutSnowplowState, useLocalStorage,  bufferSize, maxPostBytes,configUseSecureCredentials,configCollectorToken) {
+
+ 		var	usePost=true;
+
 		var	queueName,
 			executingQueue = false,
 			configCollectorUrl,
 			outQueue;
 
-		// Fall back to GET for browsers which don't support CORS XMLHttpRequests (e.g. IE <= 9)
-		usePost = usePost && window.XMLHttpRequest && ('withCredentials' in new XMLHttpRequest());
+		var path = '/com.snowplowanalytics.snowplow/tp2';
 
-		var path = usePost ? '/com.snowplowanalytics.snowplow/tp2' : '/i';
+		bufferSize = (localStorageAccessible() && useLocalStorage && bufferSize) || 1;
 
-		bufferSize = (localStorageAccessible() && useLocalStorage && usePost && bufferSize) || 1;
-
-		// Different queue names for GET and POST since they are stored differently
-		queueName = ['snowplowOutQueue', functionName, namespace, usePost ? 'post2' : 'get'].join('_');
+		queueName = ['snowplowOutQueue', functionName, namespace,  'post2'].join('_');
 
 		if (useLocalStorage) {
 			// Catch any JSON parse errors or localStorage that might be thrown
@@ -89,55 +87,15 @@
 		// Used by pageUnloadGuard
 		mutSnowplowState.outQueues.push(outQueue);
 
-		if (usePost && bufferSize > 1) {
+		if (bufferSize > 1) {
 			mutSnowplowState.bufferFlushers.push(function () {
 				if (!executingQueue) {
-					executeQueue();
+					executeQueue(configUseSecureCredentials,configCollectorToken);
 				}
 			});
 		}
 
-		/*
-		 * Convert a dictionary to a querystring
-		 * The context field is the last in the querystring
-		 */
-		function getQuerystring(request) {
-			var querystring = '?',
-				lowPriorityKeys = {'co': true, 'cx': true},
-				firstPair = true;
 
-			for (var key in request) {
-				if (request.hasOwnProperty(key) && !(lowPriorityKeys.hasOwnProperty(key))) {
-					if (!firstPair) {
-						querystring += '&';
-					} else {
-						firstPair = false;
-					}
-					querystring += encodeURIComponent(key) + '=' + encodeURIComponent(request[key]);
-				}
-			}
-
-			for (var contextKey in lowPriorityKeys) {
-				if (request.hasOwnProperty(contextKey)  && lowPriorityKeys.hasOwnProperty(contextKey)) {
-					querystring += '&' + contextKey + '=' + encodeURIComponent(request[contextKey]);
-				}
-			}
-
-			return querystring;
-		}
-
-		/*
-		 * Convert numeric fields to strings to match payload_data schema
-		 */
-		function getBody(request) {
-			var cleanedRequest = lodash.mapValues(request, function (v) {
-				return v.toString();
-			});
-			return {
-				evt: cleanedRequest,
-				bytes: getUTF8Length(json2.stringify(cleanedRequest))
-			};
-		}
 
 		/**
 		 * Count the number of bytes a string will occupy when UTF-8 encoded
@@ -171,29 +129,37 @@
 		 * Queue an image beacon for submission to the collector.
 		 * If we're not processing the queue, we'll start.
 		 */
-		function enqueueRequest (request, url) {
+		function enqueueRequest (request, url,configUseSecureCredentials,configCollectorToken) {
 
 			configCollectorUrl = url + path;
-			if (usePost) {
-				var body = getBody(request);
-				if (body.bytes >= maxPostBytes) {
-					helpers.warn("Event of size " + body.bytes + " is too long - the maximum size is " + maxPostBytes);
-					var xhr = initializeXMLHttpRequest(configCollectorUrl);
-					xhr.send(encloseInPayloadDataEnvelope(attachStmToEvent([body.evt])));
-					return;
-				} else {
-					outQueue.push(body);
+			var event=request;
+			var body = {
+				evt: event,
+				bytes: getUTF8Length(json2.stringify(event))
+			};
+			// not working for browsers which don't support CORS XMLHttpRequests (e.g. IE <= 9)
+			hasPost = window.XMLHttpRequest && ('withCredentials' in new XMLHttpRequest());
+
+			if (body.bytes >= maxPostBytes) {
+				helpers.warn("Event of size " + body.bytes + " is too long - the maximum size is " + maxPostBytes);
+				if (hasPost){
+					var xhr = initializeXMLHttpRequest(configCollectorUrl,configUseSecureCredentials,configCollectorToken);
+					xhr.send(json2.stringify([body.evt]));
+				}else{
+					helpers.warn("Browser doesn't support secure credentials");
 				}
+				return;
 			} else {
-				outQueue.push(getQuerystring(request));
+				outQueue.push(body);
 			}
+
 			var savedToLocalStorage = false;
 			if (useLocalStorage) {
 				savedToLocalStorage = helpers.attemptWriteLocalStorage(queueName, json2.stringify(outQueue));
 			}
 
 			if (!executingQueue && (!savedToLocalStorage || outQueue.length >= bufferSize)) {
-				executeQueue();
+				executeQueue(configUseSecureCredentials,configCollectorToken);
 			}
 		}
 
@@ -201,7 +167,7 @@
 		 * Run through the queue of image beacons, sending them one at a time.
 		 * Stops processing when we run out of queued requests, or we get an error.
 		 */
-		function executeQueue () {
+		function executeQueue (configUseSecureCredentials,configCollectorToken) {
 
 			// Failsafe in case there is some way for a bad value like "null" to end up in the outQueue
 			while (outQueue.length && typeof outQueue[0] !== 'string' && typeof outQueue[0] !== 'object') {
@@ -222,75 +188,58 @@
 
 			var nextRequest = outQueue[0];
 
-			if (usePost) {
+		
 
-				var xhr = initializeXMLHttpRequest(configCollectorUrl);
+			var xhr = initializeXMLHttpRequest(configCollectorUrl,configUseSecureCredentials,configCollectorToken);
 
-				// Time out POST requests after 5 seconds
-				var xhrTimeout = setTimeout(function () {
-					xhr.abort();
-					executingQueue = false;
-				}, 5000);
+			// Time out POST requests after Q seconds
+			var xhrTimeout = setTimeout(function () {
+				xhr.abort();
+				executingQueue = false;
+			}, 1000);
 
-				function chooseHowManyToExecute(q) {
-					var numberToSend = 0;
-					var byteCount = 0;
-					while (numberToSend < q.length) {
-						byteCount += q[numberToSend].bytes;
-						if (byteCount >= maxPostBytes) {
-							break;
-						} else {
-							numberToSend += 1;
-						}
+			function chooseHowManyToExecute(q) {
+				var numberToSend = 0;
+				var byteCount = 0;
+				while (numberToSend < q.length) {
+					byteCount += q[numberToSend].bytes;
+					if (byteCount >= maxPostBytes) {
+						break;
+					} else {
+						numberToSend += 1;
 					}
-					return numberToSend;
 				}
+				return numberToSend;
+			}
 
-				// Keep track of number of events to delete from queue
-				var numberToSend = chooseHowManyToExecute(outQueue);
+			// Keep track of number of events to delete from queue
+			var numberToSend = chooseHowManyToExecute(outQueue);
 
-				xhr.onreadystatechange = function () {
-					if (xhr.readyState === 4 && xhr.status >= 200 && xhr.status < 400) {
-						for (var deleteCount = 0; deleteCount < numberToSend; deleteCount++) {
-							outQueue.shift();
-						}
-						if (useLocalStorage) {
-							helpers.attemptWriteLocalStorage(queueName, json2.stringify(outQueue));
-						}
-						clearTimeout(xhrTimeout);
-						executeQueue();
-					} else if (xhr.readyState === 4 && xhr.status >= 400) {
-						clearTimeout(xhrTimeout);
-						executingQueue = false;
+			xhr.onreadystatechange = function () {
+				if (xhr.readyState === 4 && xhr.status >= 200 && xhr.status < 400) {
+					for (var deleteCount = 0; deleteCount < numberToSend; deleteCount++) {
+						outQueue.shift();
 					}
-				};
-
-				var batch = lodash.map(outQueue.slice(0, numberToSend), function (x) {
-					return x.evt;
-				});
-
-				if (batch.length > 0) {
-					xhr.send(encloseInPayloadDataEnvelope(attachStmToEvent(batch)));
-				}
-
-			} else {
-
-				var image = new Image(1, 1);
-
-				image.onload = function () {
-					outQueue.shift();
 					if (useLocalStorage) {
 						helpers.attemptWriteLocalStorage(queueName, json2.stringify(outQueue));
 					}
-					executeQueue();
-				};
-
-				image.onerror = function () {
+					clearTimeout(xhrTimeout);
+					executeQueue(configUseSecureCredentials,configCollectorToken);
+				} else if (xhr.readyState === 4 && xhr.status >= 400) {
+					clearTimeout(xhrTimeout);
 					executingQueue = false;
-				};
+				}
+			};
 
-				image.src = configCollectorUrl + nextRequest.replace('?', '?stm=' + new Date().getTime() + '&');
+			var batch = lodash.map(outQueue.slice(0, numberToSend), function (x) {
+				return x.evt;
+			});
+
+			if (batch.length > 0) {
+				xhr.send(json2.stringify(batch));
 			}
+
+
 		}
 
 		/**
@@ -299,39 +248,17 @@
 		 * @param string url The destination URL
 		 * @return object The XMLHttpRequest
 		 */
-		function initializeXMLHttpRequest(url) {
+		function initializeXMLHttpRequest(url,configUseSecureCredentials,configCollectorToken) {
 			var xhr = new XMLHttpRequest();
 			xhr.open('POST', url, true);
-			xhr.withCredentials = true;
+			xhr.withCredentials = configUseSecureCredentials;
 			xhr.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
+			xhr.setRequestHeader("x-api-key",configCollectorToken)
 			return xhr;
 		}
 
-		/**
-		 * Enclose an array of events in a self-describing payload_data JSON string
-		 *
-		 * @param array events Batch of events
-		 * @return string payload_data self-describing JSON
-		 */
-		function encloseInPayloadDataEnvelope(events) {
-			return json2.stringify({
-				schema: 'iglu:com.snowplowanalytics.snowplow/payload_data/jsonschema/1-0-3',
-				data: events
-			});
-		}
 
-		/**
-		 * Attaches the STM field to outbound POST events.
-		 *
-		 * @param events the events to attach the STM to
-		 */
-		function attachStmToEvent(events) {
-			var stm = new Date().getTime().toString();
-			for (var i = 0; i < events.length; i++) {
-				events[i]['stm'] = stm;
-			}
-			return events
-		}
+
 
 		return {
 			enqueueRequest: enqueueRequest,

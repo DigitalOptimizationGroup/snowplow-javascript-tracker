@@ -35,7 +35,6 @@
 
 	var 
 		lodash = require('../lib_managed/lodash'),
-		cookie = require('browser-cookie-lite'),
 
 		object = typeof exports !== 'undefined' ? exports : this; // For eventual node.js environment support
 
@@ -82,48 +81,7 @@
 		return domain;
 	};
 
-	/**
-	 * Get page referrer. In the case of a single-page app,
-	 * if the URL changes without the page reloading, pass
-	 * in the old URL. It will be returned unless overriden
-	 * by a "refer(r)er" parameter in the querystring.
-	 *
-	 * @param string oldLocation Optional.
-	 * @return string The referrer
-	 */
-	object.getReferrer = function (oldLocation) {
-
-		var referrer = '';
-		
-		var fromQs = object.fromQuerystring('referrer', window.location.href) ||
-		object.fromQuerystring('referer', window.location.href);
-
-		// Short-circuit
-		if (fromQs) {
-			return fromQs;
-		}
-
-		// In the case of a single-page app, return the old URL
-		if (oldLocation) {
-			return oldLocation;
-		}
-
-		try {
-			referrer = window.top.document.referrer;
-		} catch (e) {
-			if (window.parent) {
-				try {
-					referrer = window.parent.document.referrer;
-				} catch (e2) {
-					referrer = '';
-				}
-			}
-		}
-		if (referrer === '') {
-			referrer = document.referrer;
-		}
-		return referrer;
-	};
+	
 
 	/*
 	 * Cross-browser helper function to add event handler
@@ -155,7 +113,7 @@
 	 */
 	object.warn = function(message) {
 		if (typeof console !== 'undefined') {
-			console.warn('Snowplow: ' + message);
+			//console.warn('Snowplow: ' + message);
 		}
 	};
 
